@@ -1,0 +1,12 @@
+[Unit]
+Description=Servidor OpenRGB (Flatpak)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/flatpak run org.openrgb.OpenRGB --server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

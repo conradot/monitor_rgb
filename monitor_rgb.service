@@ -1,0 +1,15 @@
+[Unit]
+Description=Sincroniza RGB com Status do Ollama e Sistema
+After=network.target openrgb-server.service
+Requires=openrgb-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/conradot/Modelos/monitor_rgb
+# Aponta direto para o Python do ambiente virtual
+ExecStart=/home/conradot/Modelos/monitor_rgb/.venv/bin/python3 /home/conradot/Modelos/monitor_rgb/monitor_rgb.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
