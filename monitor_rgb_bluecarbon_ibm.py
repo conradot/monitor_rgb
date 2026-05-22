@@ -16,21 +16,20 @@ OPENRGB_HOST = "127.0.0.1"
 NUM_LEDS_FAN = 16
 
 # =========================================================================
-# CORES IBM WATSON (AVATAR DO JEOPARDY)
+# CORES IBM WATSON / CARBON DESIGN SYSTEM
 # =========================================================================
-COLOR_CYAN = (0, 200, 255)         # Azul Watson (Turquesa / Base)
-COLOR_GREEN = (0, 255, 20)         # Verde Neon (Atividade)
-COLOR_YELLOW = (255, 215, 0)       # Amarelo Ouro (Pensamento / Resposta)
-COLOR_ORANGE = (255, 60, 0)        # Laranja Intenso (Processamento pesado)
-COLOR_RED = (255, 0, 0)            # Vermelho Crítico (Estresse Térmico)
-COLOR_OFF = (0, 0, 0)              # Apagado
+COLOR_IBM_BLUE = (15, 98, 254)        # Blue 60 (Estabilidade, Base)
+COLOR_DEEP_BLUE = (0, 45, 156)        # Blue 80 (Fundo / repouso absoluto)
+COLOR_WATSON_CYAN = (0, 255, 255)     # Cyan (Processamento / Ciano brilhante)
+COLOR_WATSON_TEAL = (0, 157, 154)     # Teal 50 (Fluxo de dados, Turquesa)
+COLOR_WATSON_PURPLE = (138, 63, 252)  # Purple 50 (Alta energia)
+COLOR_WATSON_MAGENTA = (238, 83, 150) # Magenta 50 (Inteligência ativa)
+COLOR_WHITE = (255, 255, 255)         # Branco frio (Picos de processamento)
+COLOR_ALERT_RED = (218, 30, 40)       # Red 60 (Sobrecarga / Hardware Critical)
+COLOR_OFF = (0, 0, 0)                 # Apagado
 
 # Cor do Standby (apenas 1 LED aceso bem suave)
-COLOR_SLEEP = (0, 6, 8)            # Ciano ultra suave
-
-# Cores Exclusivas para Bloqueio de Tela / tmp
-COLOR_PURE_BLUE = (0, 0, 255)
-COLOR_PURE_MAGENTA = (255, 0, 255)
+COLOR_SLEEP = (1, 4, 10)           # Azul Watson/IBM ultra suave (Watson Blue muito fraco)
 
 # =========================================================================
 # CLASSES DE TELEMETRIA E RENDERIZAÇÃO
@@ -255,7 +254,7 @@ class RGBRenderer:
             if diff > head_len:
                 return base_color
             factor = diff / head_len
-            color = blend_color((255, 255, 255), head_color, factor) # Usa branco na ponta da cabeça
+            color = blend_color(COLOR_WHITE, head_color, factor)
             intensity = (1.0 - factor) ** 2.0
             return blend_color(base_color, color, intensity)
         else:
@@ -268,7 +267,7 @@ class RGBRenderer:
                 color = blend_color(head_color, tail_color, sub_factor)
             else:
                 sub_factor = (factor - 0.5) / 0.5
-                color = blend_color(tail_color, COLOR_CYAN, sub_factor)
+                color = blend_color(tail_color, COLOR_DEEP_BLUE, sub_factor)
             intensity = (1.0 - factor) ** 1.5
             return blend_color(base_color, color, intensity)
 
@@ -285,12 +284,14 @@ class RGBRenderer:
         return blend_color(base_color, star_color, intensity)
 
     def render_power_save(self, tick, ai_active, current_position, telemetry):
-        # Ocioso Power Save: Respiração sutil em Ciano (0-15%)
+        # Ocioso Power Save: Pulso vital lento e sutil
         time_sec = tick * 0.02
         breathe = (math.sin(time_sec * 0.5) + 1.0) / 2.0
         
-        base_color = COLOR_CYAN
-        dim_factor = 0.05 + (0.10 * breathe) # 5% a 15% brilho
+        # Paleta varia entre Deep Blue e Teal bem escuros
+        c1 = blend_color(COLOR_DEEP_BLUE, COLOR_WATSON_TEAL, 0.2)
+        base_color = blend_color(COLOR_DEEP_BLUE, c1, breathe)
+        dim_factor = 0.04 + (0.06 * breathe) # 4% a 10% de brilho total
         
         frame = []
         for i in range(self.num_leds):
@@ -298,12 +299,12 @@ class RGBRenderer:
             bg_color = (r, g, b)
             
             if ai_active:
-                # Fantasma verde suave com anti-aliasing
+                # Fantasma Teal suave com anti-aliasing
                 led_color = self._render_star(
                     i=i,
                     leader=current_position % self.num_leds,
                     base_color=bg_color,
-                    star_color=COLOR_GREEN,
+                    star_color=COLOR_WATSON_TEAL,
                     width=2.0
                 )
                 r, g, b = [int(x * 0.3) for x in led_color]
@@ -312,13 +313,13 @@ class RGBRenderer:
         return frame
 
     def render_balanced(self, tick, ai_active, current_position, telemetry):
-        # 1. Temperatura afeta a paleta base (Ciano e Verde) de forma contínua (55°C a 75°C)
+        # 1. Temperatura afeta a paleta base de forma contínua (55°C a 75°C)
         t_factor = max(0.0, min(1.0, (telemetry.temp - 55.0) / 20.0))
         
-        # As cores originais se deslocam suavemente para tons mais quentes (Laranja/Vermelho)
-        c1 = blend_color(COLOR_CYAN, COLOR_ORANGE, t_factor * 0.7)
-        c2 = blend_color(COLOR_GREEN, COLOR_RED, t_factor * 0.7)
-        palette_colors = [c1, c2, c1]
+        c1 = blend_color(COLOR_DEEP_BLUE, COLOR_WATSON_PURPLE, t_factor)
+        c2 = blend_color(COLOR_WATSON_CYAN, COLOR_WATSON_MAGENTA, t_factor)
+        c3 = blend_color(COLOR_IBM_BLUE, COLOR_ALERT_RED, t_factor)
+        palette_colors = [c1, c2, c3]
         
         # 2. Onda harmônica de fundo (plasma de senos orgânico)
         time_sec = tick * 0.02
@@ -339,42 +340,42 @@ class RGBRenderer:
             c = blend_color(smooth_pattern[idx1], smooth_pattern[idx2], factor)
             # Brilho de fundo com respiração sutil
             breathe = (math.sin(time_sec * 0.8) + 1.0) / 2.0
-            bg_brightness = 0.20 + (0.30 * breathe)
+            bg_brightness = 0.25 + (0.15 * breathe)
             r, g, b = [int(x * bg_brightness) for x in c]
             bg_color = (r, g, b)
             
             if ai_active:
-                # Cometa Yellow/Orange da paleta original com anti-aliasing
+                # Cometa neural anti-aliased (Magenta -> Roxo)
                 led_color = self._render_comet(
                     i=i,
                     leader=current_position % self.num_leds,
                     base_color=bg_color,
-                    head_color=COLOR_YELLOW,
-                    tail_color=COLOR_ORANGE,
+                    head_color=COLOR_WATSON_MAGENTA,
+                    tail_color=COLOR_WATSON_PURPLE,
                     head_len=1.5,
                     tail_len=5.0
                 )
             else:
-                # Estrela de repouso Yellow da paleta original
+                # Estrela de repouso Watson suave (Teal / roxo sutil)
                 idle_leader = (tick / 15.0) % self.num_leds
                 led_color = self._render_star(
                     i=i,
                     leader=idle_leader,
                     base_color=bg_color,
-                    star_color=COLOR_YELLOW,
+                    star_color=COLOR_WATSON_TEAL,
                     width=2.5
                 )
             frame.append(RGBColor(*led_color))
         return frame
 
     def render_max_perf(self, tick, ai_active, current_position, telemetry):
-        # Base Alto Desempenho: Paleta ativa original (Ciano, Verde, Laranja)
+        # Base Alto Desempenho: Paleta ativa acelerada (Magenta, Roxo, Ciano)
         # Shift contínuo com base na temperatura da CPU (55°C a 80°C)
         t_factor = max(0.0, min(1.0, (telemetry.temp - 55.0) / 25.0))
         
-        c1 = blend_color(COLOR_CYAN, COLOR_RED, t_factor * 0.6)
-        c2 = blend_color(COLOR_GREEN, COLOR_ORANGE, t_factor * 0.6)
-        c3 = blend_color(COLOR_ORANGE, COLOR_RED, t_factor * 0.8)
+        c1 = blend_color(COLOR_WATSON_PURPLE, COLOR_ALERT_RED, t_factor)
+        c2 = blend_color(COLOR_WATSON_MAGENTA, COLOR_WHITE, t_factor)
+        c3 = blend_color(COLOR_WATSON_CYAN, COLOR_WATSON_PURPLE, t_factor)
         palette_colors = [c1, c2, c3]
         
         # Onda de deslocamento rápida
@@ -395,18 +396,18 @@ class RGBRenderer:
             c = smooth_pattern[(idx1) % virtual_leds]
             c_next = smooth_pattern[(idx2) % virtual_leds]
             c_blended = blend_color(c, c_next, factor)
-            brightness = 0.80 # Brilho padrão alto (80%)
+            brightness = 0.85 # Brilho padrão alto (85%)
             r, g, b = [int(x * brightness) for x in c_blended]
             bg_color = (r, g, b)
             
             if ai_active:
-                # Cometa Yellow/Orange agressivo
+                # Cometa neural agressivo (Cabeça branca, rastro longo Magenta/Red)
                 led_color = self._render_comet(
                     i=i,
                     leader=current_position % self.num_leds,
                     base_color=bg_color,
-                    head_color=COLOR_YELLOW,
-                    tail_color=blend_color(COLOR_ORANGE, COLOR_RED, t_factor),
+                    head_color=COLOR_WHITE,
+                    tail_color=blend_color(COLOR_WATSON_MAGENTA, COLOR_ALERT_RED, t_factor),
                     head_len=1.2,
                     tail_len=6.0
                 )
@@ -422,14 +423,14 @@ class RGBRenderer:
         return frame
 
     def render_locked(self, tick):
-        # Onda espacial rotacionando suavemente (Neon Noir Aurora - Azul Puro e Magenta Puro)
+        # Onda espacial rotacionando suavemente (Neon Noir Aurora)
         time_sec = tick * 0.02
         wave_offset = time_sec * 0.5  # Movimento lento
         frame = []
         for i in range(self.num_leds):
             # Posicionamento senoidal espacial
             factor = (math.sin((i / self.num_leds) * 2 * math.pi + wave_offset) + 1.0) / 2.0
-            color = blend_color(COLOR_PURE_BLUE, COLOR_PURE_MAGENTA, factor)
+            color = blend_color(COLOR_IBM_BLUE, COLOR_WATSON_MAGENTA, factor)
             # Brilho de 15%
             r, g, b = [int(c * 0.15) for c in color]
             frame.append(RGBColor(r, g, b))
@@ -437,10 +438,10 @@ class RGBRenderer:
 
     def apply_thermal_stress(self, frame, temp):
         # Núcleo de Fusão Térmico - Red flicker overrides
-        if temp >= 70.0:
+        if temp >= 60.0:
             stressed_frame = []
             for color in frame:
-                r = int(min(255, color.red * 0.5 + COLOR_RED[0] * 0.8))
+                r = int(min(255, color.red * 0.5 + COLOR_ALERT_RED[0] * 0.8))
                 g = int(color.green * 0.4)
                 b = int(color.blue * 0.4)
                 
