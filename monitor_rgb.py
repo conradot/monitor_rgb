@@ -6,8 +6,6 @@ import pwd
 import argparse
 import math
 import random
-import re
-import threading
 from openrgb import OpenRGBClient
 from openrgb.utils import RGBColor
 
@@ -16,56 +14,35 @@ OPENRGB_HOST = "127.0.0.1"
 NUM_LEDS_FAN = 16
 
 # =========================================================================
-# CORES IBM WATSON (AVATAR DO JEOPARDY)
+# CORES IBM WATSON / CARBON DESIGN SYSTEM
 # =========================================================================
-COLOR_CYAN = (0, 200, 255)         # Azul Watson (Turquesa / Base)
-COLOR_GREEN = (0, 255, 20)         # Verde Neon (Atividade)
-COLOR_YELLOW = (255, 215, 0)       # Amarelo Ouro (Pensamento / Resposta)
-COLOR_ORANGE = (255, 60, 0)        # Laranja Intenso (Processamento pesado)
-COLOR_RED = (255, 0, 0)            # Vermelho Crítico (Estresse Térmico)
-COLOR_OFF = (0, 0, 0)              # Apagado
+COLOR_IBM_BLUE = (15, 98, 254)        # Blue 60 (Estabilidade, Base)
+COLOR_DEEP_BLUE = (0, 45, 156)        # Blue 80 (Fundo / repouso absoluto)
+COLOR_WATSON_CYAN = (0, 255, 255)     # Cyan (Processamento / Ciano brilhante)
+COLOR_WATSON_TEAL = (0, 157, 154)     # Teal 50 (Fluxo de dados, Turquesa)
+COLOR_WATSON_PURPLE = (138, 63, 252)  # Purple 50 (Alta energia)
+COLOR_WATSON_MAGENTA = (238, 83, 150) # Magenta 50 (Inteligência ativa)
+COLOR_WHITE = (255, 255, 255)         # Branco frio (Picos de processamento)
+COLOR_ALERT_RED = (218, 30, 40)       # Red 60 (Sobrecarga / Hardware Critical)
+COLOR_OFF = (0, 0, 0)                 # Apagado
 
-# Cor do Standby (apenas 1 LED aceso bem suave)
-COLOR_SLEEP = (0, 6, 8)            # Ciano ultra suave
-
-# Cores Exclusivas para Bloqueio de Tela / tmp
-COLOR_PURE_BLUE = (0, 0, 255)
-COLOR_PURE_MAGENTA = (255, 0, 255)
+# IBM Jeopardy palette
+COLOR_CYAN = (0, 200, 255)           # Azul Watson (Turquesa / Base)
+COLOR_GREEN = (0, 255, 20)           # Verde Neon (Atividade)
+COLOR_YELLOW = (255, 215, 0)         # Amarelo Ouro (Pensamento / Resposta)
 
 # =========================================================================
 # CLASSES DE TELEMETRIA E RENDERIZAÇÃO
 # =========================================================================
 
 class SystemTelemetry:
-    """Gerencia todas as chamadas de I/O de telemetria da máquina em uma thread de background."""
+    """Gerencia todas as chamadas de I/O de telemetria da máquina."""
     def __init__(self):
         self.OLLAMA_API = "http://localhost:11434/api/ps"
         self.temp = 0.0
         self.power_mode = "BALANCED"
         self.ai_active = False
         self.is_locked = False
-        self.is_suspended = False
-        self._stop_event = threading.Event()
-        self._thread = None
-
-    def start(self):
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=0.5)
-
-    def _run_loop(self):
-        while not self._stop_event.is_set():
-            try:
-                if not self.is_suspended:
-                    self.update()
-            except Exception:
-                pass
-            self._stop_event.wait(0.2)
 
     def update(self):
         self.temp = self._get_cpu_temp()
@@ -138,73 +115,6 @@ class SystemTelemetry:
         return False
 
 
-class SuspendDetector:
-    def __init__(self):
-        self.process = None
-        self.buffer = ""
-        self.is_suspended = False
-        self.start_monitor()
-
-    def start_monitor(self):
-        try:
-            if self.process:
-                try:
-                    self.process.terminate()
-                    self.process.wait(timeout=0.1)
-                except Exception:
-                    pass
-            self.process = subprocess.Popen(
-                ["dbus-monitor", "--system", "type='signal',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1
-            )
-            fd = self.process.stdout.fileno()
-            os.set_blocking(fd, False)
-        except Exception:
-            self.process = None
-
-    def check_suspend_event(self):
-        if not self.process:
-            self.start_monitor()
-            if not self.process:
-                return self.is_suspended
-
-        if self.process.poll() is not None:
-            self.start_monitor()
-            if not self.process or self.process.poll() is not None:
-                return self.is_suspended
-
-        try:
-            chunk = self.process.stdout.read()
-            if chunk:
-                self.buffer += chunk
-        except (BlockingIOError, TypeError):
-            pass
-        except Exception:
-            self.start_monitor()
-
-        if len(self.buffer) > 4096:
-            self.buffer = self.buffer[-1024:]
-
-        match = re.search(r'PrepareForSleep.*?boolean\s+(true|false)', self.buffer, re.DOTALL)
-        if match:
-            val = match.group(1)
-            self.is_suspended = (val == "true")
-            self.buffer = self.buffer[match.end():]
-
-        return self.is_suspended
-
-    def cleanup(self):
-        if self.process:
-            try:
-                self.process.terminate()
-                self.process.wait(timeout=0.2)
-            except Exception:
-                pass
-
-
 def blend_color(color_init, color_target, factor):
     """Interpolação linear de cores para criar paletas suaves."""
     factor = max(0.0, min(1.0, factor))
@@ -227,348 +137,306 @@ def create_smooth_palette(colors, num_leds):
 
 class RGBRenderer:
     """Isola a lógica visual e renderização de cada modo operacional (Efeitos)."""
-    def __init__(self, num_leds):
+    def __init__(self, num_leds, jeopardy=False):
         self.num_leds = num_leds
-        self.prev_frame = None
-        self.transition_alpha = 0.12  # Fator de suavização temporal (cross-fading)
+        self.use_jeopardy = jeopardy
+        self.heat_spark_index = None
+        self.heat_spark_timer = 0
 
-    def blend_frames(self, frame_a, frame_b, alpha):
-        """Mistura suavemente dois frames de cores para transições sem saltos."""
-        if not frame_a:
-            return frame_b
-        blended = []
-        for c1, c2 in zip(frame_a, frame_b):
-            r = int(c1.red + (c2.red - c1.red) * alpha)
-            g = int(c1.green + (c2.green - c1.green) * alpha)
-            b = int(c1.blue + (c2.blue - c1.blue) * alpha)
-            blended.append(RGBColor(r, g, b))
-        return blended
+    def _base_palette(self):
+        if self.use_jeopardy:
+            return [COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW]
+        return [COLOR_DEEP_BLUE, COLOR_WATSON_CYAN, COLOR_IBM_BLUE]
 
-    def _render_comet(self, i, leader, base_color, head_color, tail_color, head_len=1.5, tail_len=4.5):
-        """Renderiza um cometa com precisão de subpixel (anti-aliasing)."""
-        diff = (i - leader) % self.num_leds
-        if diff > self.num_leds / 2:
-            diff -= self.num_leds
-            
-        if diff >= 0:
-            # Cabeça do cometa: decaimento rápido em direção ao fundo
-            if diff > head_len:
-                return base_color
-            factor = diff / head_len
-            color = blend_color((255, 255, 255), head_color, factor) # Usa branco na ponta da cabeça
-            intensity = (1.0 - factor) ** 2.0
-            return blend_color(base_color, color, intensity)
-        else:
-            # Cauda do cometa: decaimento lento com degradê de cores
-            if diff < -tail_len:
-                return base_color
-            factor = abs(diff) / tail_len
-            if factor < 0.5:
-                sub_factor = factor / 0.5
-                color = blend_color(head_color, tail_color, sub_factor)
-            else:
-                sub_factor = (factor - 0.5) / 0.5
-                color = blend_color(tail_color, COLOR_CYAN, sub_factor)
-            intensity = (1.0 - factor) ** 1.5
-            return blend_color(base_color, color, intensity)
+    def _heat_tinted(self, color, temp_factor, max_shift=0.75):
+        heat_shift = max(0.0, min(1.0, (temp_factor - 0.20) / 0.80)) * max_shift
+        return blend_color(color, COLOR_ALERT_RED, heat_shift)
 
-    def _render_star(self, i, leader, base_color, star_color, width=2.0):
-        """Renderiza uma estrela simétrica com suavização de subpixel."""
-        diff = (i - leader) % self.num_leds
-        if diff > self.num_leds / 2:
-            diff -= self.num_leds
-            
-        dist = abs(diff)
-        if dist > width:
-            return base_color
-        intensity = (1.0 - dist / width) ** 2.0
-        return blend_color(base_color, star_color, intensity)
+    def _colorize(self, color, brightness, temp_factor):
+        r, g, b = self._heat_tinted(color, temp_factor)
+        return [int(max(0, min(255, c * brightness))) for c in (r, g, b)]
 
-    def render_power_save(self, tick, ai_active, current_position, telemetry):
-        # Ocioso Power Save: Respiração sutil em Ciano (0-15%)
-        time_sec = tick * 0.02
-        breathe = (math.sin(time_sec * 0.5) + 1.0) / 2.0
-        
-        base_color = COLOR_CYAN
-        dim_factor = 0.05 + (0.10 * breathe) # 5% a 15% brilho
-        
+    def _is_rotor_gap(self, index, position, width=2):
+        leader = int(position) % self.num_leds
+        offset = (index - leader) % self.num_leds
+        return offset < width
+
+    def render_power_save(self, tick, ai_active, current_position, temp_factor):
+        # Ocioso: Pulso Vital - Respiração sutil em Deep Blue / Ciano Escuro
+        palette = create_smooth_palette(self._base_palette(), self.num_leds)
+        breathe = (math.sin(tick * (2 * math.pi / 220)) + 1.0) / 2.0
+        brightness = 0.15 + (0.10 * breathe)
+        shift_amount = int(tick / 30.0) % self.num_leds
+        active_color = COLOR_GREEN if self.use_jeopardy else COLOR_WATSON_TEAL
+
         frame = []
         for i in range(self.num_leds):
-            r, g, b = [int(c * dim_factor) for c in base_color]
-            bg_color = (r, g, b)
-            
+            if self._is_rotor_gap(i, current_position):
+                frame.append(RGBColor(*COLOR_OFF))
+                continue
+
+            base_color = palette[(shift_amount + i) % self.num_leds]
+            r, g, b = self._colorize(base_color, brightness, temp_factor)
+
             if ai_active:
-                # Fantasma verde suave com anti-aliasing
-                led_color = self._render_star(
-                    i=i,
-                    leader=current_position % self.num_leds,
-                    base_color=bg_color,
-                    star_color=COLOR_GREEN,
-                    width=2.0
-                )
-                r, g, b = [int(x * 0.3) for x in led_color]
-            
+                leader = int(current_position) % self.num_leds
+                if i == leader:
+                    r, g, b = self._colorize(active_color, 0.30, temp_factor)
+                elif i == (leader - 1) % self.num_leds:
+                    r, g, b = self._colorize(active_color, 0.15, temp_factor)
+
             frame.append(RGBColor(r, g, b))
         return frame
 
-    def render_balanced(self, tick, ai_active, current_position, telemetry):
-        # 1. Temperatura afeta a paleta base (Ciano e Verde) de forma contínua (55°C a 75°C)
-        t_factor = max(0.0, min(1.0, (telemetry.temp - 55.0) / 20.0))
-        
-        # As cores originais se deslocam suavemente para tons mais quentes (Laranja/Vermelho)
-        c1 = blend_color(COLOR_CYAN, COLOR_ORANGE, t_factor * 0.7)
-        c2 = blend_color(COLOR_GREEN, COLOR_RED, t_factor * 0.7)
-        palette_colors = [c1, c2, c1]
-        
-        # 2. Onda harmônica de fundo (plasma de senos orgânico)
-        time_sec = tick * 0.02
-        w1 = math.sin(time_sec * 0.4) * 3.5
-        w2 = math.sin(time_sec * 1.1 + 1.2) * 1.5
-        wave_offset = w1 + w2
-        
-        smooth_pattern = create_smooth_palette(palette_colors, self.num_leds)
-        
+    def render_balanced(self, tick, ai_active, current_position, temp_factor):
+        # Ocioso: Fluxo de Dados - Maré de cores girando levemente
+        palette = create_smooth_palette(self._base_palette(), self.num_leds)
+        shift_amount = int(tick / 18.0) % self.num_leds
+        active_head = COLOR_YELLOW if self.use_jeopardy else COLOR_WATSON_MAGENTA
+        active_tail = COLOR_GREEN if self.use_jeopardy else COLOR_WATSON_PURPLE
+
         frame = []
         for i in range(self.num_leds):
-            # Posicionamento circular fluido usando a onda
-            pos = (i + wave_offset) % self.num_leds
-            idx1 = int(pos) % self.num_leds
-            idx2 = (idx1 + 1) % self.num_leds
-            factor = pos - int(pos)
-            
-            c = blend_color(smooth_pattern[idx1], smooth_pattern[idx2], factor)
-            # Brilho de fundo com respiração sutil
-            breathe = (math.sin(time_sec * 0.8) + 1.0) / 2.0
-            bg_brightness = 0.20 + (0.30 * breathe)
-            r, g, b = [int(x * bg_brightness) for x in c]
-            bg_color = (r, g, b)
-            
+            if self._is_rotor_gap(i, current_position):
+                frame.append(RGBColor(*COLOR_OFF))
+                continue
+
+            c = palette[(shift_amount + i) % self.num_leds]
+            r, g, b = self._colorize(c, 0.45, temp_factor)
+
             if ai_active:
-                # Cometa Yellow/Orange da paleta original com anti-aliasing
-                led_color = self._render_comet(
-                    i=i,
-                    leader=current_position % self.num_leds,
-                    base_color=bg_color,
-                    head_color=COLOR_YELLOW,
-                    tail_color=COLOR_ORANGE,
-                    head_len=1.5,
-                    tail_len=5.0
-                )
+                leader = current_position % self.num_leds
+                diff = (i - leader) % self.num_leds
+                if diff > self.num_leds / 2:
+                    diff -= self.num_leds
+
+                if 0 <= diff <= 1.5:
+                    factor = 1.0 - (diff / 1.5)
+                    r, g, b = self._colorize(blend_color((r, g, b), active_head, factor), 0.65, temp_factor)
+                elif -3.5 <= diff < 0:
+                    factor = 1.0 - (abs(diff) / 3.5)
+                    r, g, b = self._colorize(blend_color((r, g, b), active_tail, factor), 0.50, temp_factor)
             else:
-                # Estrela de repouso Yellow da paleta original
-                idle_leader = (tick / 15.0) % self.num_leds
-                led_color = self._render_star(
-                    i=i,
-                    leader=idle_leader,
-                    base_color=bg_color,
-                    star_color=COLOR_YELLOW,
-                    width=2.5
-                )
-            frame.append(RGBColor(*led_color))
+                idle_leader = (tick / 10.0) % self.num_leds
+                diff = (i - idle_leader) % self.num_leds
+                if diff > self.num_leds / 2:
+                    diff -= self.num_leds
+
+                if 0 <= diff <= 2.0:
+                    factor = 1.0 - (diff / 2.0)
+                    idle_color = COLOR_GREEN if self.use_jeopardy else COLOR_WATSON_PURPLE
+                    r, g, b = self._colorize(blend_color((r, g, b), idle_color, factor), 0.55, temp_factor)
+
+            frame.append(RGBColor(r, g, b))
         return frame
 
-    def render_max_perf(self, tick, ai_active, current_position, telemetry):
-        # Base Alto Desempenho: Paleta ativa original (Ciano, Verde, Laranja)
-        # Shift contínuo com base na temperatura da CPU (55°C a 80°C)
-        t_factor = max(0.0, min(1.0, (telemetry.temp - 55.0) / 25.0))
-        
-        c1 = blend_color(COLOR_CYAN, COLOR_RED, t_factor * 0.6)
-        c2 = blend_color(COLOR_GREEN, COLOR_ORANGE, t_factor * 0.6)
-        c3 = blend_color(COLOR_ORANGE, COLOR_RED, t_factor * 0.8)
-        palette_colors = [c1, c2, c3]
-        
-        # Onda de deslocamento rápida
-        time_sec = tick * 0.02
-        w1 = math.sin(time_sec * 1.5) * 2.0
-        wave_offset = (tick / 4.0) + w1
-        
+    def render_max_perf(self, tick, ai_active, current_position, temp_factor):
+        # Ocioso: Nó de Computação - Circulação intensa com cores de alta performance
+        if self.use_jeopardy:
+            palette_colors = [COLOR_YELLOW, COLOR_GREEN, COLOR_CYAN]
+        else:
+            palette_colors = [COLOR_WATSON_MAGENTA, COLOR_WATSON_PURPLE, COLOR_WATSON_CYAN]
+
         virtual_leds = int(self.num_leds * 1.5)
         smooth_pattern = create_smooth_palette(palette_colors, virtual_leds)
-        
+        if ai_active:
+            shift_amount = int(current_position) % virtual_leds
+        else:
+            shift_amount = int(tick / 5.0) % virtual_leds
+
+        active_trail = COLOR_YELLOW if self.use_jeopardy else COLOR_WATSON_MAGENTA
+
         frame = []
         for i in range(self.num_leds):
-            pos = (i + wave_offset) % virtual_leds
-            idx1 = int(pos) % virtual_leds
-            idx2 = (idx1 + 1) % virtual_leds
-            factor = pos - int(pos)
-            
-            c = smooth_pattern[(idx1) % virtual_leds]
-            c_next = smooth_pattern[(idx2) % virtual_leds]
-            c_blended = blend_color(c, c_next, factor)
-            brightness = 0.80 # Brilho padrão alto (80%)
-            r, g, b = [int(x * brightness) for x in c_blended]
-            bg_color = (r, g, b)
-            
-            if ai_active:
-                # Cometa Yellow/Orange agressivo
-                led_color = self._render_comet(
-                    i=i,
-                    leader=current_position % self.num_leds,
-                    base_color=bg_color,
-                    head_color=COLOR_YELLOW,
-                    tail_color=blend_color(COLOR_ORANGE, COLOR_RED, t_factor),
-                    head_len=1.2,
-                    tail_len=6.0
-                )
-                frame.append(RGBColor(*led_color))
-            else:
-                frame.append(RGBColor(r, g, b))
-        return frame
+            if self._is_rotor_gap(i, current_position):
+                frame.append(RGBColor(*COLOR_OFF))
+                continue
 
-    def render_suspend(self):
-        # Apenas 1 LED aceso bem suave (LED 0)
-        frame = [RGBColor(0, 0, 0)] * self.num_leds
-        frame[0] = RGBColor(*COLOR_SLEEP)
+            c = smooth_pattern[(shift_amount + i) % virtual_leds]
+            r, g, b = self._colorize(c, 0.92, temp_factor)
+
+            if ai_active:
+                leader = current_position % self.num_leds
+                diff = (i - leader) % self.num_leds
+                if diff > self.num_leds / 2:
+                    diff -= self.num_leds
+
+                if 0 <= diff <= 1.0:
+                    factor = 1.0 - diff
+                    r, g, b = self._colorize(blend_color((r, g, b), COLOR_WHITE, factor), 1.0, temp_factor)
+                elif -4.0 <= diff < 0:
+                    factor = 1.0 - (abs(diff) / 4.0)
+                    r, g, b = self._colorize(blend_color((r, g, b), active_trail, factor), 0.85, temp_factor)
+
+            frame.append(RGBColor(r, g, b))
         return frame
 
     def render_locked(self, tick):
-        # Onda espacial rotacionando suavemente (Neon Noir Aurora - Azul Puro e Magenta Puro)
-        time_sec = tick * 0.02
-        wave_offset = time_sec * 0.5  # Movimento lento
-        frame = []
-        for i in range(self.num_leds):
-            # Posicionamento senoidal espacial
-            factor = (math.sin((i / self.num_leds) * 2 * math.pi + wave_offset) + 1.0) / 2.0
-            color = blend_color(COLOR_PURE_BLUE, COLOR_PURE_MAGENTA, factor)
-            # Brilho de 15%
-            r, g, b = [int(c * 0.15) for c in color]
-            frame.append(RGBColor(r, g, b))
-        return frame
+        # Tela bloqueada em onda Azul/Magenta constante
+        wave = (math.sin(tick * (2 * math.pi / 250)) + 1.0) / 2.0
+        ambient_color = blend_color(COLOR_IBM_BLUE, COLOR_WATSON_MAGENTA, wave)
+        dim_ambient = [int(c * 0.15) for c in ambient_color]
+        return [RGBColor(*dim_ambient)] * self.num_leds
 
-    def apply_thermal_stress(self, frame, temp):
-        # Núcleo de Fusão Térmico - Red flicker overrides
-        if temp >= 70.0:
+    def apply_thermal_stress(self, frame, temp, power_mode):
+        # Núcleo de Fusão Térmico - Red flicker overrides e faísca branca dura em todos os modos
+        if temp >= 60.0:
             stressed_frame = []
-            for color in frame:
-                r = int(min(255, color.red * 0.5 + COLOR_RED[0] * 0.8))
+            spark_active = False
+            if power_mode == "POWER_SAVE" and temp >= 78.0:
+                spark_chance = min(0.70, 0.30 + ((temp - 78.0) / 22.0))
+                spark_duration = random.randint(1, 2)
+            elif power_mode == "MAX_PERF" and temp >= 74.0:
+                spark_chance = min(0.75, 0.25 + ((temp - 74.0) / 18.0))
+                spark_duration = random.randint(1, 3)
+            elif temp >= 82.0:
+                spark_chance = 0.20 + ((temp - 82.0) / 40.0)
+                spark_duration = 1
+            else:
+                spark_chance = 0.0
+                spark_duration = 0
+
+            if self.heat_spark_timer <= 0 and random.random() < spark_chance:
+                self.heat_spark_index = random.randrange(self.num_leds)
+                self.heat_spark_timer = spark_duration
+
+            spark_active = self.heat_spark_timer > 0
+
+            for index, color in enumerate(frame):
+                r = int(min(255, color.red * 0.5 + COLOR_ALERT_RED[0] * 0.8))
                 g = int(color.green * 0.4)
                 b = int(color.blue * 0.4)
-                
+
                 flicker = random.uniform(-0.30, 0.30)
                 r = min(255, max(0, int(r * (1.0 + flicker))))
                 g = min(255, max(0, int(g * (1.0 + flicker))))
                 b = min(255, max(0, int(b * (1.0 + flicker))))
-                
+
+                if spark_active and index == self.heat_spark_index:
+                    if power_mode == "MAX_PERF":
+                        white_strength = min(1.2, 1.0 + ((temp - 74.0) / 60.0))
+                        r = min(255, int(COLOR_WHITE[0] * white_strength))
+                        g = min(255, int(COLOR_WHITE[1] * white_strength))
+                        b = min(255, int(COLOR_WHITE[2] * white_strength))
+                    else:
+                        white_intensity = 1.0 if self.heat_spark_timer >= 2 else 0.65
+                        r = min(255, int(r * 0.10 + COLOR_WHITE[0] * white_intensity))
+                        g = min(255, int(g * 0.10 + COLOR_WHITE[1] * white_intensity))
+                        b = min(255, int(b * 0.10 + COLOR_WHITE[2] * white_intensity))
+
                 stressed_frame.append(RGBColor(r, g, b))
+
+            if spark_active:
+                self.heat_spark_timer -= 1
+                if self.heat_spark_timer <= 0:
+                    self.heat_spark_index = None
             return stressed_frame
         return frame
         
     def generate_frame(self, telemetry, tick, current_position):
-        # 0. Modo suspensão
-        if getattr(telemetry, 'is_suspended', False):
-            target_frame = self.render_suspend()
-        # 1. Tela bloqueada
-        elif telemetry.is_locked or os.path.exists("/tmp/use_magenta"):
-            target_frame = self.render_locked(tick)
-        else:
-            # 2. Renderização do modo atual
-            if telemetry.power_mode == "POWER_SAVE":
-                target_frame = self.render_power_save(tick, telemetry.ai_active, current_position, telemetry)
-            elif telemetry.power_mode == "MAX_PERF":
-                target_frame = self.render_max_perf(tick, telemetry.ai_active, current_position, telemetry)
-            else:
-                target_frame = self.render_balanced(tick, telemetry.ai_active, current_position, telemetry)
-                
-            # 3. Aplicação do estresse térmico
-            target_frame = self.apply_thermal_stress(target_frame, telemetry.temp)
+        if telemetry.is_locked or os.path.exists("/tmp/use_magenta"):
+            return self.render_locked(tick)
             
-        # 4. Mistura com o frame anterior (temporal cross-fading)
-        if self.prev_frame is None:
-            self.prev_frame = target_frame
+        temp_clamped = max(46.0, min(95.0, telemetry.temp))
+        temp_factor = (temp_clamped - 46.0) / 49.0
+        
+        if telemetry.power_mode == "POWER_SAVE":
+            frame = self.render_power_save(tick, telemetry.ai_active, current_position, temp_factor)
+        elif telemetry.power_mode == "MAX_PERF":
+            frame = self.render_max_perf(tick, telemetry.ai_active, current_position, temp_factor)
         else:
-            self.prev_frame = self.blend_frames(self.prev_frame, target_frame, self.transition_alpha)
+            frame = self.render_balanced(tick, telemetry.ai_active, current_position, temp_factor)
             
-        return self.prev_frame
+        return self.apply_thermal_stress(frame, telemetry.temp, telemetry.power_mode)
 
 
 # =========================================================================
 # MAIN LOOP ORQUESTRADOR
 # =========================================================================
-def main(verbose=False):
+def main(verbose=False, jeopardy=False):
     client = None
     fan_zone = None
     tick = 0
     current_position = 0.0
 
     telemetry = SystemTelemetry()
-    renderer = RGBRenderer(NUM_LEDS_FAN)
-    suspend_detector = SuspendDetector()
+    renderer = RGBRenderer(NUM_LEDS_FAN, jeopardy=jeopardy)
 
-    try:
-        telemetry.start()
-        while True:
-            if client is None or fan_zone is None:
-                try:
-                    client = OpenRGBClient(OPENRGB_HOST, 6742)
-                    device = next((d for d in client.devices if 'ASUS' in d.name or 'B650M' in d.name), None)
+    while True:
+        if client is None or fan_zone is None:
+            try:
+                client = OpenRGBClient(OPENRGB_HOST, 6742)
+                device = next((d for d in client.devices if 'ASUS' in d.name or 'B650M' in d.name), None)
 
-                    if not device:
-                        if verbose: print("Aguardando placa-mãe...")
-                        client = None
-                        time.sleep(5)
-                        continue
-
-                    try:
-                        device.set_mode('direct')
-                    except Exception:
-                        pass
-
-                    fan_zone = next((z for z in device.zones if 'Addressable 3' in z.name), None)
-                    if not fan_zone:
-                        fan_zone = device.zones[-1]
-
-                    if verbose: print(f"Conectado: '{fan_zone.name}'!")
-                except Exception as e:
-                    if verbose: print(f"Aguardando OpenRGB... ({e})")
+                if not device:
+                    if verbose: print("Aguardando placa-mãe...")
                     client = None
-                    fan_zone = None
                     time.sleep(5)
                     continue
 
-            try:
-                # Monitora suspensão a cada ciclo (50Hz) para evitar freeze sem desligar LEDs
-                telemetry.is_suspended = suspend_detector.check_suspend_event()
+                try:
+                    device.set_mode('direct')
+                except Exception:
+                    pass
 
-                # Log da Telemetria a cada 50 ticks (1 segundo a 50Hz)
-                if tick % 50 == 0:
-                    if verbose:
-                        print(f"Susp: {telemetry.is_suspended} | Temp: {telemetry.temp:.1f}°C | Modo: {telemetry.power_mode} | IA: {telemetry.ai_active} | Bloq: {telemetry.is_locked}")
+                fan_zone = next((z for z in device.zones if 'Addressable 3' in z.name), None)
+                if not fan_zone:
+                    fan_zone = device.zones[-1]
 
-                # Define velocidade do Cometa baseado no status do sistema
-                if telemetry.is_suspended or telemetry.is_locked or os.path.exists("/tmp/use_magenta"):
-                    speed = 0.0
-                elif telemetry.ai_active:
-                    temp_clamped = max(46.0, min(95.0, telemetry.temp))
-                    temp_factor = (temp_clamped - 46.0) / 49.0
+                if verbose: print(f"Conectado: '{fan_zone.name}'!")
+            except Exception as e:
+                if verbose: print(f"Aguardando OpenRGB... ({e})")
+                client = None
+                fan_zone = None
+                time.sleep(5)
+                continue
+
+        try:
+            # Polling da Telemetria a cada 100 ticks (2 segundos a 50Hz)
+            if tick % 100 == 0:
+                telemetry.update()
+                if verbose:
+                    print(f"Temp: {telemetry.temp:.1f}°C | Modo: {telemetry.power_mode} | IA: {telemetry.ai_active} | Bloq: {telemetry.is_locked}")
+
+            # Define velocidade do Cometa baseado na IA, temperatura e modo
+            if telemetry.is_locked or os.path.exists("/tmp/use_magenta"):
+                speed = 0.0
+            else:
+                temp_clamped = max(46.0, min(95.0, telemetry.temp))
+                temp_factor = (temp_clamped - 46.0) / 49.0
+                if telemetry.ai_active:
                     if telemetry.power_mode == "POWER_SAVE":
-                        speed = 0.05
+                        speed = 0.05 + (0.12 * (temp_factor ** 1.8))
                     elif telemetry.power_mode == "MAX_PERF":
-                        speed = 0.3 + (2.0 * (temp_factor ** 2.0))
+                        speed = 0.30 + (2.0 * (temp_factor ** 2.0))
                     else:
                         speed = 0.15 + (1.0 * (temp_factor ** 2.0))
                 else:
-                    speed = 0.0
+                    if telemetry.power_mode == "POWER_SAVE":
+                        speed = 0.02 + (0.10 * (temp_factor ** 1.6))
+                    elif telemetry.power_mode == "MAX_PERF":
+                        speed = 0.06 + (0.18 * (temp_factor ** 1.6))
+                    else:
+                        speed = 0.04 + (0.12 * (temp_factor ** 1.6))
 
-                current_position += speed
+            current_position += speed
 
-                # Gera e aplica o frame
-                frame = renderer.generate_frame(telemetry, tick, current_position)
-                fan_zone.set_colors(frame)
+            # Gera e aplica o frame
+            frame = renderer.generate_frame(telemetry, tick, current_position)
+            fan_zone.set_colors(frame)
 
-                tick += 1
-                time.sleep(0.02) # Trava em 50Hz
+            tick += 1
+            time.sleep(0.02) # Trava em 50Hz
 
-            except (ConnectionResetError, BrokenPipeError):
-                if verbose: print("Reconectando...")
-                client = None
-                fan_zone = None
-                time.sleep(2)
-    finally:
-        telemetry.stop()
-        suspend_detector.cleanup()
+        except (ConnectionResetError, BrokenPipeError):
+            if verbose: print("Reconectando...")
+            client = None
+            fan_zone = None
+            time.sleep(2)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("-j", "--jeopardy", action="store_true", help="Ativa paleta IBM Jeopardy")
     args = parser.parse_args()
-    main(verbose=args.verbose)
+    main(verbose=args.verbose, jeopardy=args.jeopardy)
