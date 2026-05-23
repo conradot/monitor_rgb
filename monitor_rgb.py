@@ -23,6 +23,7 @@ COLOR_WATSON_TEAL = (0, 157, 154)     # Teal 50 (Fluxo de dados, Turquesa)
 COLOR_WATSON_PURPLE = (138, 63, 252)  # Purple 50 (Alta energia)
 COLOR_WATSON_MAGENTA = (238, 83, 150) # Magenta 50 (Inteligência ativa)
 COLOR_WHITE = (255, 255, 255)         # Branco frio (Picos de processamento)
+COLOR_WARN_WHITE = (255, 230, 200)    # Branco quente (Picos com tom mais suave)
 COLOR_ALERT_RED = (218, 30, 40)       # Red 60 (Sobrecarga / Hardware Critical)
 COLOR_OFF = (0, 0, 0)                 # Apagado
 
@@ -284,13 +285,16 @@ class RGBRenderer:
             stressed_frame = []
             spark_active = False
             if power_mode == "POWER_SAVE" and temp >= 78.0:
-                spark_chance = min(0.70, 0.30 + ((temp - 78.0) / 22.0))
+                spark_chance = min(0.50, 0.15 + ((temp - 78.0) / 22.0))  
+                #spark_chance = min(0.50, 0.15 + ((temp - 78.0) / 22.0))
                 spark_duration = random.randint(1, 2)
             elif power_mode == "MAX_PERF" and temp >= 74.0:
-                spark_chance = min(0.75, 0.25 + ((temp - 74.0) / 18.0))
+                spark_chance = min(0.55, 0.15 + ((temp - 74.0) / 18.0))  
+                #spark_chance = min(0.55, 0.15 + ((temp - 74.0) / 18.0))
                 spark_duration = random.randint(1, 3)
             elif temp >= 82.0:
-                spark_chance = 0.20 + ((temp - 82.0) / 40.0)
+                spark_chance = 0.12 + ((temp - 82.0) / 40.0)  
+                #spark_chance = 0.12 + ((temp - 82.0) / 40.0)
                 spark_duration = 1
             else:
                 spark_chance = 0.0
@@ -315,14 +319,14 @@ class RGBRenderer:
                 if spark_active and index == self.heat_spark_index:
                     if power_mode == "MAX_PERF":
                         white_strength = min(1.2, 1.0 + ((temp - 74.0) / 60.0))
-                        r = min(255, int(COLOR_WHITE[0] * white_strength))
-                        g = min(255, int(COLOR_WHITE[1] * white_strength))
-                        b = min(255, int(COLOR_WHITE[2] * white_strength))
+                        r = min(255, int(COLOR_WARN_WHITE[0] * white_strength))
+                        g = min(255, int(COLOR_WARN_WHITE[1] * white_strength))
+                        b = min(255, int(COLOR_WARN_WHITE[2] * white_strength))
                     else:
                         white_intensity = 1.0 if self.heat_spark_timer >= 2 else 0.65
-                        r = min(255, int(r * 0.10 + COLOR_WHITE[0] * white_intensity))
-                        g = min(255, int(g * 0.10 + COLOR_WHITE[1] * white_intensity))
-                        b = min(255, int(b * 0.10 + COLOR_WHITE[2] * white_intensity))
+                        r = min(255, int(r * 0.10 + COLOR_WARN_WHITE[0] * white_intensity))
+                        g = min(255, int(g * 0.10 + COLOR_WARN_WHITE[1] * white_intensity))
+                        b = min(255, int(b * 0.10 + COLOR_WARN_WHITE[2] * white_intensity))
 
                 stressed_frame.append(RGBColor(r, g, b))
 
