@@ -13,9 +13,9 @@ from openrgb.utils import RGBColor
 OPENRGB_HOST = "127.0.0.1"
 NUM_LEDS_FAN = 16
 
-# Separação de LEDs (convenção: Externo = 8..15, Interno = 0..7)
-LEDS_ANEL_EXTERNO = range(8, 16)    # LEDs 9-16 (índices 8-15) - Aro de fora
-LEDS_NUCLEO_INTERNO = range(0, 8)   # LEDs 1-8 (índices 0-7) - Núcleo quente
+# Separação de LEDs
+LEDS_INTERNOS = range(0, 8)    # LEDs 1-8 (índices 0-7)
+LEDS_EXTERNOS = range(8, 16)   # LEDs 9-16 (índices 8-15)
 
 # =========================================================================
 # CORES IBM WATSON / CARBON DESIGN SYSTEM
@@ -150,11 +150,13 @@ class RGBRenderer:
     def __init__(self, num_leds, jeopardy=False):
         self.num_leds = num_leds
         self.use_jeopardy = jeopardy
+        self.heat_spark_index = None
+        self.heat_spark_timer = 0
 
     def _base_palette(self):
         if self.use_jeopardy:
             return [COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW]
-        return [COLOR_DEEP_BLUE, COLOR_WATSON_PURPLE, COLOR_IBM_BLUE]
+        return [COLOR_DEEP_BLUE, COLOR_WATSON_CYAN, COLOR_IBM_BLUE]
 
     def _heat_tinted(self, color, temp_factor, max_shift=0.75):
         heat_shift = max(0.0, min(1.0, (temp_factor - 0.20) / 0.80)) * max_shift
@@ -181,59 +183,26 @@ class RGBRenderer:
             factor = (temp_factor - 0.5) * 2.0  # 0.0 a 1.0
             return blend_color(COLOR_HEAT_ORANGE, COLOR_HEAT_RED, factor)
 
-    def _blend_internal_heat_color(self, base_color, temp_factor):
-        heat_color = self._get_thermal_gradient_color(temp_factor)
-        blend_factor = max(0.0, min(1.0, temp_factor))
-        return blend_color(base_color, heat_color, blend_factor)
-
-    def _external_ai_color(self, index, current_position):
-        palette = [COLOR_CYAN, COLOR_GREEN, COLOR_YELLOW]
-        offset = (index + int(current_position / 2)) % len(palette)
-        return palette[offset]
-
-    def _apply_external_ai_palette(self, frame, current_position):
-        for i in LEDS_ANEL_EXTERNO:
-            if 0 <= i < len(frame):
-                r, g, b = self._external_ai_color(i, current_position)
-                frame[i] = RGBColor(r, g, b)
-        return frame
-
-    def _apply_internal_ai_palette(self, frame, current_position):
-        # Internals assume IBM blue/purple palette when AI is active
-        palette = [COLOR_IBM_BLUE, COLOR_WATSON_PURPLE]
-        for idx, i in enumerate(LEDS_NUCLEO_INTERNO):
-            if 0 <= i < len(frame):
-                base = palette[(idx + int(current_position)) % len(palette)]
-                frame[i] = RGBColor(*base)
-        return frame
+    def _sync_led_color(self, index, color):
+        """Sincroniza cor entre LEDs internos (0-7) e externos (8-15)."""
+        if index in LEDS_INTERNOS:
+            # LED interno: mantém a cor original
+            return color
+        elif index in LEDS_EXTERNOS:
+            # LED externo: usa cor do LED interno correspondente
+            internal_index = index - 8  # Converte 8-15 para 0-7
+            return color  # Será sincronizado no apply_thermal_stress
+        return color
 
     def render_power_save(self, tick, ai_active, current_position, temp_factor):
-        # Power-save: quando sem IA, mostrar só núcleo interno com baixo brilho
+        # Ocioso: Pulso Vital - Respiração sutil em Deep Blue / Ciano Escuro
         palette = create_smooth_palette(self._base_palette(), self.num_leds)
-        shift_amount = int(tick / 30.0) % self.num_leds
-
-        frame = []
-        if not ai_active:
-            # Anel externo apagado; núcleo interno a 30%
-            for i in range(self.num_leds):
-                if self._is_rotor_gap(i, current_position):
-                    frame.append(RGBColor(*COLOR_OFF))
-                    continue
-
-                if i in LEDS_ANEL_EXTERNO:
-                    frame.append(RGBColor(*COLOR_OFF))
-                    continue
-
-                base_color = palette[(shift_amount + i) % self.num_leds]
-                r, g, b = self._colorize(base_color, 0.30, temp_factor)
-                frame.append(RGBColor(r, g, b))
-            return frame
-
-        # Com IA, mantém comportamento mais ativo (cometas sutis)
         breathe = (math.sin(tick * (2 * math.pi / 220)) + 1.0) / 2.0
         brightness = 0.15 + (0.10 * breathe)
+        shift_amount = int(tick / 30.0) % self.num_leds
         active_color = COLOR_GREEN if self.use_jeopardy else COLOR_WATSON_TEAL
 
+        frame = []
         for i in range(self.num_leds):
             if self._is_rotor_gap(i, current_position):
                 frame.append(RGBColor(*COLOR_OFF))
@@ -242,40 +211,24 @@ class RGBRenderer:
             base_color = palette[(shift_amount + i) % self.num_leds]
             r, g, b = self._colorize(base_color, brightness, temp_factor)
 
-            leader = int(current_position) % self.num_leds
-            if i == leader:
-                r, g, b = self._colorize(active_color, 0.30, temp_factor)
-            elif i == (leader - 1) % self.num_leds:
-                r, g, b = self._colorize(active_color, 0.15, temp_factor)
+            if ai_active:
+                leader = int(current_position) % self.num_leds
+                if i == leader:
+                    r, g, b = self._colorize(active_color, 0.30, temp_factor)
+                elif i == (leader - 1) % self.num_leds:
+                    r, g, b = self._colorize(active_color, 0.15, temp_factor)
 
             frame.append(RGBColor(r, g, b))
         return frame
 
     def render_balanced(self, tick, ai_active, current_position, temp_factor):
-        # Balanced: sem IA -> anel externo apagado, núcleo interno a 70%
+        # Ocioso: Fluxo de Dados - Maré de cores girando levemente
         palette = create_smooth_palette(self._base_palette(), self.num_leds)
         shift_amount = int(tick / 18.0) % self.num_leds
-
-        frame = []
-        if not ai_active:
-            for i in range(self.num_leds):
-                if self._is_rotor_gap(i, current_position):
-                    frame.append(RGBColor(*COLOR_OFF))
-                    continue
-
-                if i in LEDS_ANEL_EXTERNO:
-                    frame.append(RGBColor(*COLOR_OFF))
-                    continue
-
-                c = palette[(shift_amount + i) % self.num_leds]
-                r, g, b = self._colorize(c, 0.70, temp_factor)
-                frame.append(RGBColor(r, g, b))
-            return frame
-
-        # Com IA: mantém fluxo de dados com destaques
         active_head = COLOR_YELLOW if self.use_jeopardy else COLOR_WATSON_MAGENTA
         active_tail = COLOR_GREEN if self.use_jeopardy else COLOR_WATSON_PURPLE
 
+        frame = []
         for i in range(self.num_leds):
             if self._is_rotor_gap(i, current_position):
                 frame.append(RGBColor(*COLOR_OFF))
@@ -284,17 +237,28 @@ class RGBRenderer:
             c = palette[(shift_amount + i) % self.num_leds]
             r, g, b = self._colorize(c, 0.45, temp_factor)
 
-            leader = current_position % self.num_leds
-            diff = (i - leader) % self.num_leds
-            if diff > self.num_leds / 2:
-                diff -= self.num_leds
+            if ai_active:
+                leader = current_position % self.num_leds
+                diff = (i - leader) % self.num_leds
+                if diff > self.num_leds / 2:
+                    diff -= self.num_leds
 
-            if 0 <= diff <= 1.5:
-                factor = 1.0 - (diff / 1.5)
-                r, g, b = self._colorize(blend_color((r, g, b), active_head, factor), 0.65, temp_factor)
-            elif -3.5 <= diff < 0:
-                factor = 1.0 - (abs(diff) / 3.5)
-                r, g, b = self._colorize(blend_color((r, g, b), active_tail, factor), 0.50, temp_factor)
+                if 0 <= diff <= 1.5:
+                    factor = 1.0 - (diff / 1.5)
+                    r, g, b = self._colorize(blend_color((r, g, b), active_head, factor), 0.65, temp_factor)
+                elif -3.5 <= diff < 0:
+                    factor = 1.0 - (abs(diff) / 3.5)
+                    r, g, b = self._colorize(blend_color((r, g, b), active_tail, factor), 0.50, temp_factor)
+            else:
+                idle_leader = (tick / 10.0) % self.num_leds
+                diff = (i - idle_leader) % self.num_leds
+                if diff > self.num_leds / 2:
+                    diff -= self.num_leds
+
+                if 0 <= diff <= 2.0:
+                    factor = 1.0 - (diff / 2.0)
+                    idle_color = COLOR_GREEN if self.use_jeopardy else COLOR_WATSON_PURPLE
+                    r, g, b = self._colorize(blend_color((r, g, b), idle_color, factor), 0.55, temp_factor)
 
             frame.append(RGBColor(r, g, b))
         return frame
@@ -322,9 +286,7 @@ class RGBRenderer:
                 continue
 
             c = smooth_pattern[(shift_amount + i) % virtual_leds]
-            # Em max perf sem IA, usar 70% de brilho em ambos os anéis
-            base_brightness = 0.70 if not ai_active else 0.92
-            r, g, b = self._colorize(c, base_brightness, temp_factor)
+            r, g, b = self._colorize(c, 0.92, temp_factor)
 
             if ai_active:
                 leader = current_position % self.num_leds
@@ -349,60 +311,88 @@ class RGBRenderer:
         dim_ambient = [int(c * 0.15) for c in ambient_color]
         return [RGBColor(*dim_ambient)] * self.num_leds
 
-    def apply_thermal_stress(self, frame, temp, power_mode, ai_active=False, temp_factor=0.0):
-        # Núcleo de Fusão Térmico
-        # Anel externo [1..8]: mantém cores Jeopardy, reduz brilho + sparkling ocasional
-        # Núcleo interno [9..16]: intensifica laranja/vermelho conforme temperatura
-
-        temp_factor_thermal = max(0.0, min(1.0, (temp - 46.0) / 49.0))
+    def apply_thermal_stress(self, frame, temp, power_mode):
+        # Núcleo de Fusão Térmico com sincronização LED interno↔externo
+        # LEDs internos (0-7): gradação térmica (Amarelo→Laranja→Vermelho) + centelha
+        # LEDs externos (8-15): apenas centelha (sincronizados com internos)
         
         if temp >= 60.0:
             stressed_frame = []
+            spark_active = False
             
-            # Probabilidade REDUZIDA de sparkling no anel externo
-            sparkling_chance = 0.0
-            if ai_active and temp >= 72.0:
-                sparkling_chance = min(0.08, 0.03 + ((temp - 72.0) / 150.0))
-            elif temp >= 78.0:
-                sparkling_chance = min(0.06, 0.02 + ((temp - 78.0) / 200.0))
+            # Calcular fator de temperatura para gradação (0.0 = 60°C, 1.0 = 95°C)
+            temp_factor_thermal = max(0.0, min(1.0, (temp - 60.0) / 35.0))
+            
+            if power_mode == "POWER_SAVE" and temp >= 78.0:
+                spark_chance = min(0.50, 0.15 + ((temp - 78.0) / 22.0))  
+                spark_duration = random.randint(1, 2)
+            elif power_mode == "MAX_PERF" and temp >= 74.0:
+                spark_chance = min(0.55, 0.15 + ((temp - 74.0) / 18.0))  
+                spark_duration = random.randint(1, 3)
             elif temp >= 82.0:
-                sparkling_chance = 0.04
-            
-            # Fator de redução de brilho para o anel externo conforme temperatura
-            dimming_factor = max(0.3, 1.0 - (temp_factor_thermal * 0.6))
+                spark_chance = 0.12 + ((temp - 82.0) / 40.0)  
+                spark_duration = 1
+            else:
+                spark_chance = 0.0
+                spark_duration = 0
+
+            if self.heat_spark_timer <= 0 and random.random() < spark_chance:
+                # Definir centelha aleatória nos LEDs externos apenas
+                self.heat_spark_index = random.choice(list(LEDS_EXTERNOS))
+                self.heat_spark_timer = spark_duration
+
+            spark_active = self.heat_spark_timer > 0
 
             for index, color in enumerate(frame):
-                if index in LEDS_NUCLEO_INTERNO:
-                    # LEDs do núcleo: intensifica laranja/vermelho com temperatura
-                    r, g, b = self._blend_internal_heat_color((color.red, color.green, color.blue), temp_factor_thermal)
+                if index in LEDS_INTERNOS:
+                    # ===== LEDs INTERNOS: Gradação Térmica + Centelha =====
+                    # Cor base com gradação amarelo→laranja→vermelho
+                    thermal_color = self._get_thermal_gradient_color(temp_factor_thermal)
+                    r = thermal_color[0]
+                    g = thermal_color[1]
+                    b = thermal_color[2]
                     
-                    # Flicker natural no núcleo quente
-                    flicker = random.uniform(-0.15, 0.15)
-                    r = min(255, max(0, int(r * (1.0 + flicker))))
-                    g = min(255, max(0, int(g * (1.0 + flicker))))
-                    b = min(255, max(0, int(b * (1.0 + flicker))))
-                else:
-                    # LEDs do anel externo: mantém cores Jeopardy, reduz brilho
-                    r = int(color.red * dimming_factor)
-                    g = int(color.green * dimming_factor)
-                    b = int(color.blue * dimming_factor)
-                    
-                    # Efeito sparkling: picos ocasionais e moderados (1 frame)
-                    if random.random() < sparkling_chance:
-                        # Pico branco quente e moderado
-                        spark_intensity = 0.5 + (0.15 * temp_factor_thermal)
-                        r = min(255, int(r * 0.4 + COLOR_WARN_WHITE[0] * spark_intensity))
-                        g = min(255, int(g * 0.4 + COLOR_WARN_WHITE[1] * spark_intensity))
-                        b = min(255, int(b * 0.4 + COLOR_WARN_WHITE[2] * spark_intensity))
+                    # Aplicar centelha opcional
+                    if spark_active and index == self.heat_spark_index:
+                        # Centelha branca com intensidade baseada em temperatura
+                        white_intensity = 0.8 + (0.2 * temp_factor_thermal)
+                        r = min(255, int(COLOR_WARN_WHITE[0] * white_intensity))
+                        g = min(255, int(COLOR_WARN_WHITE[1] * white_intensity))
+                        b = min(255, int(COLOR_WARN_WHITE[2] * white_intensity))
                     else:
-                        # Flicker sutil no anel quando não há spark
-                        flicker = random.uniform(-0.08, 0.08)
+                        # Flicker suave nos internos
+                        flicker = random.uniform(-0.15, 0.15)
+                        r = min(255, max(0, int(r * (1.0 + flicker))))
+                        g = min(255, max(0, int(g * (1.0 + flicker))))
+                        b = min(255, max(0, int(b * (1.0 + flicker))))
+                    
+                elif index in LEDS_EXTERNOS:
+                    # ===== LEDs EXTERNOS: Apenas Centelha (sincronizado) =====
+                    # Começar com cor base escura
+                    r = int(color.red * 0.3)
+                    g = int(color.green * 0.3)
+                    b = int(color.blue * 0.3)
+                    
+                    # Aplicar centelha se houver
+                    if spark_active and index == self.heat_spark_index:
+                        # Centelha branca brilhante
+                        white_intensity = 1.0 if self.heat_spark_timer >= 2 else 0.65
+                        r = min(255, int(r * 0.1 + COLOR_WARN_WHITE[0] * white_intensity))
+                        g = min(255, int(g * 0.1 + COLOR_WARN_WHITE[1] * white_intensity))
+                        b = min(255, int(b * 0.1 + COLOR_WARN_WHITE[2] * white_intensity))
+                    else:
+                        # Flicker suave sem cor base (apenas centelha)
+                        flicker = random.uniform(-0.20, 0.20)
                         r = min(255, max(0, int(r * (1.0 + flicker))))
                         g = min(255, max(0, int(g * (1.0 + flicker))))
                         b = min(255, max(0, int(b * (1.0 + flicker))))
 
                 stressed_frame.append(RGBColor(r, g, b))
 
+            if spark_active:
+                self.heat_spark_timer -= 1
+                if self.heat_spark_timer <= 0:
+                    self.heat_spark_index = None
             return stressed_frame
         return frame
         
@@ -419,11 +409,8 @@ class RGBRenderer:
             frame = self.render_max_perf(tick, telemetry.ai_active, current_position, temp_factor)
         else:
             frame = self.render_balanced(tick, telemetry.ai_active, current_position, temp_factor)
-
-        if telemetry.ai_active:
-            frame = self._apply_external_ai_palette(frame, current_position)
             
-        return self.apply_thermal_stress(frame, telemetry.temp, telemetry.power_mode, telemetry.ai_active, temp_factor)
+        return self.apply_thermal_stress(frame, telemetry.temp, telemetry.power_mode)
 
 
 # =========================================================================
